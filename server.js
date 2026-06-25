@@ -123,6 +123,12 @@ function iniciarCarregamento() {
     });
 }
 
+// Health check
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'healthy' });
+});
+
+// Rota raiz
 app.get('/', (req, res) => {
   res.json({
     status: 'ok',
@@ -132,6 +138,7 @@ app.get('/', (req, res) => {
   });
 });
 
+// API de produtos
 app.get('/api/produtos', (req, res) => {
   if (!cache) {
     return res.status(503).json({
@@ -158,11 +165,11 @@ app.get('/api/produtos', (req, res) => {
   res.json({ total, page, limit, pages: Math.ceil(total / limit), data: pagina });
 });
 
+// Inicia o servidor
 const server = app.listen(PORT, () => {
   console.log(`==================================================`);
   console.log(`🚀 SERVIDOR RODANDO NA PORTA ${PORT}`);
   console.log(`==================================================`);
-  console.log('📡 Servidor listening... carregando cache...');
   iniciarCarregamento();
 });
 
