@@ -158,9 +158,13 @@ app.get('/api/produtos', (req, res) => {
   res.json({ total, page, limit, pages: Math.ceil(total / limit), data: pagina });
 });
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`==================================================`);
   console.log(`🚀 SERVIDOR RODANDO NA PORTA ${PORT}`);
   console.log(`==================================================`);
+  console.log('📡 Servidor listening... carregando cache...');
   iniciarCarregamento();
 });
+
+// Timeout de segurança
+server.setTimeout(120000); // 2 minutos
