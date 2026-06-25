@@ -10,12 +10,12 @@ const PORT = process.env.PORT || 3001;
 app.use(cors());
 app.use(express.json());
 
-const CSV_FILE_NAME = 'export_filtrado.csv';
+const CSV_FILE_NAME = 'export_filtrado.csv';lstat
 
 function encontrarCSV() {
   const caminhos = [
-    '/app/data /export_midea_31_13.csv',
-    '/app/data/export_midea_31_13.csv',
+    '/app/data /export_filtrado.csv',
+    '/app/data/export_filtrado.csv',
     path.join(__dirname, CSV_FILE_NAME),
   ];
   for (const p of caminhos) {
