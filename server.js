@@ -11,7 +11,7 @@ app.use(cors());
 app.use(express.json());
 
 const CSV_FILE_NAME = 'export_midea_31_13.csv';
-const csvPath = path.join(__dirname, CSV_FILE_NAME);
+const csvPath = path.join('/app/data', CSV_FILE_NAME);
 
 let cache = null;
 let carregando = false;
