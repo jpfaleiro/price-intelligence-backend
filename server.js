@@ -10,7 +10,7 @@ const PORT = process.env.PORT || 3001;
 app.use(cors());
 app.use(express.json());
 
-const CSV_FILE_NAME = 'export_filtrado.csv';lstat
+const CSV_FILE_NAME = 'export_filtrado.csv';
 
 function encontrarCSV() {
   const caminhos = [
