@@ -75,16 +75,13 @@ function carregarCache() {
       .pipe(csv({ separator: ',' }))
       .on('data', (row) => {
         totalLinhas++;
-
         const tsDia = parsarDataHora(row['COLLECTION DATE'], '00:00');
         if (tsDia > maiorTs) {
           maiorTs = tsDia;
           dataFiltro = row['COLLECTION DATE'];
         }
-
         const tsLinha = parsarDataHora(row['COLLECTION DATE'], row['COLLECTION HOUR']);
         const chave = `${row['SKU']}__${row['MARKETPLACE']}__${row['SELLER OF MARKETPLACE'] || ''}`;
-
         const existente = mapaUnico.get(chave);
         if (!existente || tsLinha >= existente._ts) {
           mapaUnico.set(chave, { row, _ts: tsLinha, _data: row['COLLECTION DATE'] });
@@ -97,7 +94,6 @@ function carregarCache() {
           row.__busca = normalizarTexto(Object.values(row).join(' '));
           linhasFinais.push(row);
         }
-
         cache = linhasFinais;
         erroCarregamento = null;
         const ms = Date.now() - inicio;
@@ -121,9 +117,6 @@ function iniciarCarregamento() {
     .finally(() => { carregando = false; });
 }
 
-// ─── HELPERS DE IA ────────────────────────────────────────────────────────────
-
-// Retorna o preço numérico de um registro (SPOT > PIX > FORWARD)
 function precoEfetivo(row) {
   const spot    = parseFloat(row['SPOT PRICE OF MARKETPLACE']) || 0;
   const pix     = parseFloat(row['PIX PRICE']) || 0;
@@ -131,13 +124,11 @@ function precoEfetivo(row) {
   return pix > 0 ? pix : spot > 0 ? spot : forward;
 }
 
-// Calcula o piso de mercado por SKU (menor preço entre todos os vendedores)
 function calcularPisoMercado(registrosSKU) {
   const precos = registrosSKU.map(precoEfetivo).filter((p) => p > 0);
   return precos.length ? Math.min(...precos) : 0;
 }
 
-// Agrupa cache por campo
 function agruparPor(lista, campo) {
   return lista.reduce((acc, row) => {
     const key = row[campo] || 'DESCONHECIDO';
@@ -147,7 +138,7 @@ function agruparPor(lista, campo) {
   }, {});
 }
 
-// ─── ROTAS EXISTENTES ─────────────────────────────────────────────────────────
+// ─── ROTAS ────────────────────────────────────────────────────────────────────
 
 app.get('/health', (req, res) => {
   res.status(200).json({ status: 'healthy' });
@@ -170,40 +161,23 @@ app.get('/api/produtos', (req, res) => {
         : 'Servidor ainda carregando, tente em alguns segundos.',
     });
   }
-
   const page  = Math.max(1, parseInt(req.query.page) || 1);
   const limit = Math.min(2000, parseInt(req.query.limit) || 500);
   const q     = normalizarTexto(req.query.q || '');
-
   const filtrados = q ? cache.filter((p) => p.__busca.includes(q)) : cache;
-
   const total  = filtrados.length;
   const inicio = (page - 1) * limit;
   const pagina = filtrados.slice(inicio, inicio + limit).map(({ __busca, ...resto }) => resto);
-
   console.log(`🔍 q="${q}" → ${total} resultados`);
   res.json({ total, page, limit, pages: Math.ceil(total / limit), data: pagina });
 });
 
-// ─── NOVAS ROTAS DE IA ────────────────────────────────────────────────────────
-
-/**
- * GET /api/resumo
- * Dados agregados do mercado para o resumo executivo gerado pela IA.
- * Retorna: ticket médio, canal líder, top categorias, share por marketplace.
- */
 app.get('/api/resumo', (req, res) => {
-  if (!cache) {
-    return res.status(503).json({ error: 'Cache ainda carregando.' });
-  }
+  if (!cache) return res.status(503).json({ error: 'Cache ainda carregando.' });
 
-  // Ticket médio geral
   const precos = cache.map(precoEfetivo).filter((p) => p > 0);
-  const ticketMedio = precos.length
-    ? precos.reduce((a, b) => a + b, 0) / precos.length
-    : 0;
+  const ticketMedio = precos.length ? precos.reduce((a, b) => a + b, 0) / precos.length : 0;
 
-  // Share e ticket médio por marketplace
   const porMarketplace = agruparPor(cache, 'MARKETPLACE');
   const shareMarketplace = Object.entries(porMarketplace)
     .map(([nome, rows]) => {
@@ -218,10 +192,8 @@ app.get('/api/resumo', (req, res) => {
     .sort((a, b) => b.registros - a.registros)
     .slice(0, 8);
 
-  // Canal líder (mais registros)
   const canalLider = shareMarketplace[0] || null;
 
-  // Top categorias por volume
   const porCategoria = agruparPor(cache, 'CATEGORY');
   const topCategorias = Object.entries(porCategoria)
     .map(([cat, rows]) => ({
@@ -235,14 +207,12 @@ app.get('/api/resumo', (req, res) => {
     .sort((a, b) => b.registros - a.registros)
     .slice(0, 6);
 
-  // Top marcas
   const porMarca = agruparPor(cache, 'BRAND');
   const topMarcas = Object.entries(porMarca)
     .map(([marca, rows]) => ({ marca, registros: rows.length }))
     .sort((a, b) => b.registros - a.registros)
     .slice(0, 5);
 
-  // Data de coleta
   const dataColeta = cache[0]?.['COLLECTION DATE'] || 'N/A';
 
   res.json({
@@ -256,21 +226,11 @@ app.get('/api/resumo', (req, res) => {
   });
 });
 
-/**
- * GET /api/alertas
- * Detecta automaticamente situações críticas nos dados:
- * - SKUs com maior variação de preço entre canais
- * - Marketplaces com preço médio mais baixo (pressão de margem)
- * - Subcategorias com maior número de registros de preço baixo
- */
 app.get('/api/alertas', (req, res) => {
-  if (!cache) {
-    return res.status(503).json({ error: 'Cache ainda carregando.' });
-  }
+  if (!cache) return res.status(503).json({ error: 'Cache ainda carregando.' });
 
   const alertas = [];
 
-  // ── 1. Maior variação de preço por SKU entre marketplaces ──
   const porSKU = agruparPor(cache, 'SKU');
   const variacoesSKU = Object.entries(porSKU)
     .filter(([, rows]) => rows.length >= 2)
@@ -309,7 +269,6 @@ app.get('/api/alertas', (req, res) => {
     });
   }
 
-  // ── 2. Marketplace com menor preço médio (pressão de margem) ──
   const porMarketplace = agruparPor(cache, 'MARKETPLACE');
   const ticketsPorCanal = Object.entries(porMarketplace)
     .map(([mp, rows]) => {
@@ -332,14 +291,10 @@ app.get('/api/alertas', (req, res) => {
       severidade: diff > 15 ? 'CRITICO' : 'ATENCAO',
       titulo: 'Pressão de margem por canal',
       descricao: `${maisBarato.marketplace} pratica ticket médio ${diff.toFixed(1)}% abaixo de ${maisCaro.marketplace} (R$${maisBarato.ticketMedio.toFixed(2)} vs R$${maisCaro.ticketMedio.toFixed(2)}).`,
-      rankingCanais: ticketsPorCanal.map((c) => ({
-        ...c,
-        ticketMedio: c.ticketMedio.toFixed(2),
-      })),
+      rankingCanais: ticketsPorCanal.map((c) => ({ ...c, ticketMedio: c.ticketMedio.toFixed(2) })),
     });
   }
 
-  // ── 3. Categoria com maior dispersão de preço (guerra tarifária) ──
   const porCategoria = agruparPor(cache, 'CATEGORY');
   const dispersaoCat = Object.entries(porCategoria)
     .filter(([, rows]) => rows.length >= 5)
@@ -348,7 +303,7 @@ app.get('/api/alertas', (req, res) => {
       if (!ps.length) return null;
       const media = ps.reduce((a, b) => a + b, 0) / ps.length;
       const desvio = Math.sqrt(ps.reduce((a, b) => a + Math.pow(b - media, 2), 0) / ps.length);
-      const cv = (desvio / media) * 100; // coeficiente de variação
+      const cv = (desvio / media) * 100;
       return {
         categoria: cat,
         registros: rows.length,
@@ -372,7 +327,6 @@ app.get('/api/alertas', (req, res) => {
     });
   }
 
-  // ── 4. Subcategoria com oportunidade (preço alto consistente) ──
   const porSubcat = agruparPor(cache, 'SUBCATEGORY');
   const oportunidades = Object.entries(porSubcat)
     .filter(([, rows]) => rows.length >= 3)
@@ -390,32 +344,19 @@ app.get('/api/alertas', (req, res) => {
       severidade: 'INFO',
       titulo: 'Subcategorias com ticket premium',
       descricao: `"${oportunidades[0].subcategoria}" apresenta ticket médio de R$${oportunidades[0].ticketMedio.toFixed(2)} com estabilidade de preço — oportunidade de posicionamento.`,
-      subcategorias: oportunidades.map((o) => ({
-        ...o,
-        ticketMedio: o.ticketMedio.toFixed(2),
-      })),
+      subcategorias: oportunidades.map((o) => ({ ...o, ticketMedio: o.ticketMedio.toFixed(2) })),
     });
   }
 
   res.json({ total: alertas.length, dataColeta: cache[0]?.['COLLECTION DATE'] || 'N/A', alertas });
 });
 
-/**
- * GET /api/contexto-ia
- * Payload consolidado e formatado para injetar diretamente no system prompt do analista.
- * Query params:
- *   ?sku=XXXXX   → adiciona dados detalhados de um SKU específico
- *   ?q=termo     → filtra contexto por busca livre
- */
 app.get('/api/contexto-ia', (req, res) => {
-  if (!cache) {
-    return res.status(503).json({ error: 'Cache ainda carregando.' });
-  }
+  if (!cache) return res.status(503).json({ error: 'Cache ainda carregando.' });
 
   const skuFiltro = normalizarTexto(req.query.sku || '');
   const qFiltro   = normalizarTexto(req.query.q || '');
 
-  // ── Métricas gerais ──
   const precos = cache.map(precoEfetivo).filter((p) => p > 0);
   const ticketMedioGeral = precos.length
     ? (precos.reduce((a, b) => a + b, 0) / precos.length).toFixed(2)
@@ -448,12 +389,9 @@ app.get('/api/contexto-ia', (req, res) => {
     .sort((a, b) => b.registros - a.registros)
     .slice(0, 5);
 
-  // ── Dados de SKU específico (se informado) ──
   let dadosSKU = null;
   if (skuFiltro) {
-    const rowsSKU = cache.filter((r) =>
-      normalizarTexto(r['SKU']).includes(skuFiltro)
-    );
+    const rowsSKU = cache.filter((r) => normalizarTexto(r['SKU']).includes(skuFiltro));
     if (rowsSKU.length > 0) {
       const ps = rowsSKU.map(precoEfetivo).filter((p) => p > 0);
       const pisoMercado = calcularPisoMercado(rowsSKU);
@@ -468,18 +406,15 @@ app.get('/api/contexto-ia', (req, res) => {
         precoMaximo: Math.max(...ps).toFixed(2),
         precoMedio: (ps.reduce((a, b) => a + b, 0) / ps.length).toFixed(2),
         pisoMercado: pisoMercado.toFixed(2),
-        ocorrenciasPorCanal: Object.entries(agruparPor(rowsSKU, 'MARKETPLACE')).map(
-          ([mp, rows]) => ({
-            canal: mp,
-            preco: precoEfetivo(rows[0]).toFixed(2),
-            seller: rows[0]['SELLER OF MARKETPLACE'] || '',
-          })
-        ),
+        ocorrenciasPorCanal: Object.entries(agruparPor(rowsSKU, 'MARKETPLACE')).map(([mp, rows]) => ({
+          canal: mp,
+          preco: precoEfetivo(rows[0]).toFixed(2),
+          seller: rows[0]['SELLER OF MARKETPLACE'] || '',
+        })),
       };
     }
   }
 
-  // ── Resultado de busca livre (se informado) ──
   let resultadoBusca = null;
   if (qFiltro && !skuFiltro) {
     const encontrados = cache.filter((r) => r.__busca.includes(qFiltro)).slice(0, 20);
@@ -492,7 +427,6 @@ app.get('/api/contexto-ia', (req, res) => {
     }));
   }
 
-  // ── Formata texto do system prompt ──
   const linhasCanais = canais.map(
     (c) => `  - ${c.canal}: ticket médio R$${c.ticketMedio}, ${c.share} do share, ${c.registros} registros`
   ).join('\n');
@@ -506,26 +440,13 @@ app.get('/api/contexto-ia', (req, res) => {
     const canaisSKU = dadosSKU.ocorrenciasPorCanal
       .map((o) => `    • ${o.canal}: R$${o.preco}${o.seller ? ` (${o.seller})` : ''}`)
       .join('\n');
-    textoSKU = `
-SKU ANALISADO: ${dadosSKU.sku}
-Produto: ${dadosSKU.produto}
-Categoria: ${dadosSKU.categoria} / ${dadosSKU.subcategoria}
-Marca: ${dadosSKU.marca}
-Preço mínimo no mercado: R$${dadosSKU.precoMinimo}
-Preço máximo no mercado: R$${dadosSKU.precoMaximo}
-Preço médio: R$${dadosSKU.precoMedio}
-Piso de mercado (menor preço encontrado): R$${dadosSKU.pisoMercado}
-Ocorrências por canal:
-${canaisSKU}
-`;
+    textoSKU = `\nSKU ANALISADO: ${dadosSKU.sku}\nProduto: ${dadosSKU.produto}\nCategoria: ${dadosSKU.categoria} / ${dadosSKU.subcategoria}\nMarca: ${dadosSKU.marca}\nPreço mínimo no mercado: R$${dadosSKU.precoMinimo}\nPreço máximo no mercado: R$${dadosSKU.precoMaximo}\nPreço médio: R$${dadosSKU.precoMedio}\nPiso de mercado (menor preço encontrado): R$${dadosSKU.pisoMercado}\nOcorrências por canal:\n${canaisSKU}\n`;
   }
 
   let textoBusca = '';
   if (resultadoBusca && resultadoBusca.length > 0) {
     textoBusca = `\nPRODUTOS ENCONTRADOS PARA "${req.query.q}":\n` +
-      resultadoBusca.map(
-        (r) => `  - SKU ${r.sku} | ${r.produto} | ${r.marketplace} | R$${r.preco}`
-      ).join('\n');
+      resultadoBusca.map((r) => `  - SKU ${r.sku} | ${r.produto} | ${r.marketplace} | R$${r.preco}`).join('\n');
   }
 
   const systemPrompt = `Você é um analista de inteligência de mercado especializado em eletrodomésticos no Brasil.
@@ -561,14 +482,9 @@ Ao responder: seja direto, cite números concretos, indique o canal/SKU específ
   });
 });
 
-// ─── PROXY CLAUDE API ─────────────────────────────────────────────────────────
+// ─── PROXY GROQ API ───────────────────────────────────────────────────────────
 
-/**
- * POST /api/chat
- * Proxy seguro para a Claude API. A chave fica só no backend.
- * Body: { messages: [...], systemPrompt?: string, skuParam?: string }
- */
-apapp.post('/api/chat', async (req, res) => {
+app.post('/api/chat', async (req, res) => {
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) {
     return res.status(500).json({ error: 'GROQ_API_KEY não configurada no servidor.' });
@@ -693,85 +609,6 @@ Ao responder: seja direto, cite números concretos dos dados acima, indique o ca
 
     const data = await response.json();
     const texto = data.choices?.[0]?.message?.content ?? 'Sem resposta.';
-    res.json({ resposta: texto });
-
-  } catch (err) {
-    console.error('Erro no proxy /api/chat:', err.message);
-    res.status(500).json({ error: 'Erro interno no proxy.', detalhe: err.message });
-  }
-});
-
-      // SKU específico se vier no body
-      let textoSKU = '';
-      if (skuParam) {
-        const norm = v => String(v || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-        const rowsSKU = cache.filter(r => norm(r['SKU']).includes(norm(skuParam)));
-        if (rowsSKU.length > 0) {
-          const ps = rowsSKU.map(r => {
-            const spot = parseFloat(r['SPOT PRICE OF MARKETPLACE']) || 0;
-            const pix  = parseFloat(r['PIX PRICE']) || 0;
-            const fwd  = parseFloat(r['FORWARD PRICE OF MARKETPLACE']) || 0;
-            return pix > 0 ? pix : spot > 0 ? spot : fwd;
-          }).filter(p => p > 0);
-          const min = Math.min(...ps);
-          const max = Math.max(...ps);
-          const med = (ps.reduce((a, b) => a + b, 0) / ps.length).toFixed(2);
-          const canaisSKU = Object.entries(
-            rowsSKU.reduce((acc, r) => { const k = r['MARKETPLACE'] || '?'; if (!acc[k]) acc[k] = r; return acc; }, {})
-          ).map(([mp, r]) => {
-            const spot = parseFloat(r['SPOT PRICE OF MARKETPLACE']) || 0;
-            const pix  = parseFloat(r['PIX PRICE']) || 0;
-            const fwd  = parseFloat(r['FORWARD PRICE OF MARKETPLACE']) || 0;
-            const p = pix > 0 ? pix : spot > 0 ? spot : fwd;
-            return `    • ${mp}: R$${p.toFixed(2)}`;
-          }).join('\n');
-          textoSKU = `\nSKU ANALISADO: ${rowsSKU[0]['SKU']}\nProduto: ${rowsSKU[0]['PRODUCT'] || rowsSKU[0]['TITLE OF MARKETPLACE']}\nPreço mínimo: R$${min.toFixed(2)} | Máximo: R$${max.toFixed(2)} | Médio: R$${med}\nOcorrências por canal:\n${canaisSKU}\n`;
-        }
-      }
-
-      system = `Você é um analista de inteligência de mercado especializado em eletrodomésticos no Brasil.
-Responda sempre em português, de forma direta e objetiva. Use os dados abaixo como base para suas análises.
-
-=== DADOS DO MERCADO (${cache[0]?.['COLLECTION DATE'] || 'N/A'}) ===
-Total de registros monitorados: ${cache.length}
-Ticket médio geral: R$${ticketMedio}
-
-CANAIS DIGITAIS MONITORADOS:
-${linhasCanais}
-${textoSKU}
-=== FIM DOS DADOS ===
-
-Ao responder: seja direto, cite números concretos dos dados acima, indique o canal/SKU específico quando relevante, e finalize com uma recomendação de ação clara.`;
-    }
-
-    // Monta histórico no formato Gemini
-    const geminiMessages = messages.map(m => ({
-      role: m.role === 'assistant' ? 'model' : 'user',
-      parts: [{ text: m.content }],
-    }));
-
-    // Chama Gemini API
-    const response = await fetch(
-       `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-8b:generateContent?key=${apiKey}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          system_instruction: { parts: [{ text: system }] },
-          contents: geminiMessages,
-          generationConfig: { maxOutputTokens: 1000, temperature: 0.7 },
-        }),
-      }
-    );
-
-    if (!response.ok) {
-      const err = await response.text();
-      console.error('Erro Gemini API:', err);
-      return res.status(response.status).json({ error: 'Erro na Gemini API.', detalhe: err });
-    }
-
-    const data = await response.json();
-    const texto = data.candidates?.[0]?.content?.parts?.[0]?.text ?? 'Sem resposta.';
     res.json({ resposta: texto });
 
   } catch (err) {
