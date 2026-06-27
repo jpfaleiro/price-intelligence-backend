@@ -568,10 +568,10 @@ Ao responder: seja direto, cite números concretos, indique o canal/SKU específ
  * Proxy seguro para a Claude API. A chave fica só no backend.
  * Body: { messages: [...], systemPrompt?: string, skuParam?: string }
  */
-app.post('/api/chat', async (req, res) => {
-  const apiKey = process.env.GEMINI_API_KEY;
+apapp.post('/api/chat', async (req, res) => {
+  const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) {
-    return res.status(500).json({ error: 'GEMINI_API_KEY não configurada no servidor.' });
+    return res.status(500).json({ error: 'GROQ_API_KEY não configurada no servidor.' });
   }
 
   const { messages, systemPrompt, skuParam } = req.body;
@@ -581,10 +581,8 @@ app.post('/api/chat', async (req, res) => {
   }
 
   try {
-    // Se não veio systemPrompt pronto, monta um com dados do cache
     let system = systemPrompt;
     if (!system && cache) {
-      // Reutiliza a lógica do /api/contexto-ia inline
       const precos = cache.map(r => {
         const spot = parseFloat(r['SPOT PRICE OF MARKETPLACE']) || 0;
         const pix  = parseFloat(r['PIX PRICE']) || 0;
@@ -624,6 +622,84 @@ app.post('/api/chat', async (req, res) => {
       const linhasCanais = canais.map(c =>
         `  - ${c.canal}: ticket médio R$${c.ticketMedio}, ${c.share} do share, ${c.registros} registros`
       ).join('\n');
+
+      let textoSKU = '';
+      if (skuParam) {
+        const norm = v => String(v || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+        const rowsSKU = cache.filter(r => norm(r['SKU']).includes(norm(skuParam)));
+        if (rowsSKU.length > 0) {
+          const ps = rowsSKU.map(r => {
+            const spot = parseFloat(r['SPOT PRICE OF MARKETPLACE']) || 0;
+            const pix  = parseFloat(r['PIX PRICE']) || 0;
+            const fwd  = parseFloat(r['FORWARD PRICE OF MARKETPLACE']) || 0;
+            return pix > 0 ? pix : spot > 0 ? spot : fwd;
+          }).filter(p => p > 0);
+          const min = Math.min(...ps);
+          const max = Math.max(...ps);
+          const med = (ps.reduce((a, b) => a + b, 0) / ps.length).toFixed(2);
+          const canaisSKU = Object.entries(
+            rowsSKU.reduce((acc, r) => { const k = r['MARKETPLACE'] || '?'; if (!acc[k]) acc[k] = r; return acc; }, {})
+          ).map(([mp, r]) => {
+            const spot = parseFloat(r['SPOT PRICE OF MARKETPLACE']) || 0;
+            const pix  = parseFloat(r['PIX PRICE']) || 0;
+            const fwd  = parseFloat(r['FORWARD PRICE OF MARKETPLACE']) || 0;
+            const p = pix > 0 ? pix : spot > 0 ? spot : fwd;
+            return `    • ${mp}: R$${p.toFixed(2)}`;
+          }).join('\n');
+          textoSKU = `\nSKU ANALISADO: ${rowsSKU[0]['SKU']}\nProduto: ${rowsSKU[0]['PRODUCT'] || rowsSKU[0]['TITLE OF MARKETPLACE']}\nPreço mínimo: R$${min.toFixed(2)} | Máximo: R$${max.toFixed(2)} | Médio: R$${med}\nOcorrências por canal:\n${canaisSKU}\n`;
+        }
+      }
+
+      system = `Você é um analista de inteligência de mercado especializado em eletrodomésticos no Brasil.
+Responda sempre em português, de forma direta e objetiva. Use os dados abaixo como base para suas análises.
+
+=== DADOS DO MERCADO (${cache[0]?.['COLLECTION DATE'] || 'N/A'}) ===
+Total de registros monitorados: ${cache.length}
+Ticket médio geral: R$${ticketMedio}
+
+CANAIS DIGITAIS MONITORADOS:
+${linhasCanais}
+${textoSKU}
+=== FIM DOS DADOS ===
+
+Ao responder: seja direto, cite números concretos dos dados acima, indique o canal/SKU específico quando relevante, e finalize com uma recomendação de ação clara.`;
+    }
+
+    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: 'llama-3.1-8b-instant',
+        messages: [
+          { role: 'system', content: system },
+          ...messages.map(m => ({
+            role: m.role === 'ai' ? 'assistant' : m.role,
+            content: m.content,
+          })),
+        ],
+        max_tokens: 1000,
+        temperature: 0.7,
+      }),
+    });
+
+    if (!response.ok) {
+      const err = await response.text();
+      console.error('Erro Groq API:', err);
+      return res.status(response.status).json({ error: 'Erro na Groq API.', detalhe: err });
+    }
+
+    const data = await response.json();
+    const texto = data.choices?.[0]?.message?.content ?? 'Sem resposta.';
+    res.json({ resposta: texto });
+
+  } catch (err) {
+    console.error('Erro no proxy /api/chat:', err.message);
+    res.status(500).json({ error: 'Erro interno no proxy.', detalhe: err.message });
+  }
+});
 
       // SKU específico se vier no body
       let textoSKU = '';
